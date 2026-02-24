@@ -9,7 +9,7 @@ on:
 env:
   RDP_USERNAME: ashu
   RDP_PASSWORD: As12@hu12
-  FRP_VERSION: 0.52.3
+  FRP_VERSION: 0.65.0
   FRP_CONFIG_PATH: frpc.toml
 
 jobs:
@@ -23,7 +23,6 @@ jobs:
 
       - name: Enable RDP and Open All Ports
         run: |
-          # Enable Remote Desktop
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
             -Name "fDenyTSConnections" -Value 0 -Force
@@ -32,9 +31,7 @@ jobs:
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
             -Name "UserAuthentication" -Value 0 -Force
 
-          # Disable Windows Firewall entirely (ALL PORTS OPEN)
           netsh advfirewall set allprofiles state off
-
           Restart-Service TermService -Force
 
       - name: Create RDP User (Static Credentials)
@@ -51,10 +48,6 @@ jobs:
 
           Add-LocalGroupMember -Group "Administrators" -Member "$env:RDP_USERNAME"
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "$env:RDP_USERNAME"
-
-          Write-Host "RDP USER CREATED"
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: $env:RDP_PASSWORD"
 
       - name: Download FRP Client
         run: |
@@ -78,8 +71,6 @@ jobs:
             -FilePath "$env:RUNNER_TEMP\frpc.exe" `
             -ArgumentList "-c", "$env:RUNNER_TEMP\frpc.toml" `
             -NoNewWindow
-
-          Write-Host "FRP CLIENT STARTED"
 
       - name: Keep Runner Alive
         run: |
