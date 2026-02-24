@@ -9,7 +9,7 @@ on:
 env:
   RDP_USERNAME: ashu
   RDP_PASSWORD: As12@hu12
-  FRP_VERSION: 0.65.0
+  FRP_VERSION: 0.67.0
   FRP_CONFIG_PATH: frpc.toml
 
 jobs:
