@@ -1,0 +1,98 @@
+name: RDP-FRP
+
+on:
+  workflow_dispatch:
+
+# ================================
+# USER CONFIGURATION (EDIT HERE)
+# ================================
+env:
+  RDP_USERNAME: ashu
+  RDP_PASSWORD: As12@hu12
+  FRP_VERSION: 0.52.3
+  FRP_CONFIG_PATH: frpc.toml
+
+jobs:
+  rdp-frp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable RDP and Open All Ports
+        run: |
+          # Enable Remote Desktop
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+            -Name "fDenyTSConnections" -Value 0 -Force
+
+          Set-ItemProperty `
+            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+            -Name "UserAuthentication" -Value 0 -Force
+
+          # Disable Windows Firewall entirely (ALL PORTS OPEN)
+          netsh advfirewall set allprofiles state off
+
+          Restart-Service TermService -Force
+
+      - name: Create RDP User (Static Credentials)
+        run: |
+          $password = ConvertTo-SecureString "$env:RDP_PASSWORD" -AsPlainText -Force
+
+          if (-not (Get-LocalUser -Name "$env:RDP_USERNAME" -ErrorAction SilentlyContinue)) {
+              New-LocalUser `
+                -Name "$env:RDP_USERNAME" `
+                -Password $password `
+                -AccountNeverExpires `
+                -PasswordNeverExpires
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member "$env:RDP_USERNAME"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "$env:RDP_USERNAME"
+
+          Write-Host "RDP USER CREATED"
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_PASSWORD"
+
+      - name: Download FRP Client
+        run: |
+          $url = "https://github.com/fatedier/frp/releases/download/v$env:FRP_VERSION/frp_$env:FRP_VERSION_windows_amd64.zip"
+          $zip = "$env:TEMP\frp.zip"
+          $dir = "$env:TEMP\frp"
+
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive $zip -DestinationPath $dir -Force
+
+          Move-Item `
+            "$dir\frp_$env:FRP_VERSION_windows_amd64\frpc.exe" `
+            "$env:RUNNER_TEMP\frpc.exe" `
+            -Force
+
+      - name: Run FRP Client
+        run: |
+          Copy-Item "$env:FRP_CONFIG_PATH" "$env:RUNNER_TEMP\frpc.toml" -Force
+
+          Start-Process `
+            -FilePath "$env:RUNNER_TEMP\frpc.exe" `
+            -ArgumentList "-c", "$env:RUNNER_TEMP\frpc.toml" `
+            -NoNewWindow
+
+          Write-Host "FRP CLIENT STARTED"
+
+      - name: Keep Runner Alive
+        run: |
+          Write-Host ""
+          Write-Host "=============================="
+          Write-Host " RDP + FRP SESSION ACTIVE"
+          Write-Host "=============================="
+          Write-Host "Username: $env:RDP_USERNAME"
+          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "=============================="
+          Write-Host ""
+
+          while ($true) {
+              Write-Host "[$(Get-Date)] Runner active"
+              Start-Sleep -Seconds 300
+          }
