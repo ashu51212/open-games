@@ -1,0 +1,9 @@
+serverAddr = "13.205.129.141"
+serverPort = 7000
+
+[[proxies]]
+name = "rdp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 3389
+remotePort = 3389
