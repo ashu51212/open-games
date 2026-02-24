@@ -10,7 +10,8 @@ env:
   RDP_USERNAME: ashu
   RDP_PASSWORD: As12@hu12
   FRP_VERSION: 0.67.0
-  FRP_CONFIG_PATH: frpc.toml
+  FRP_DIR: C:\frp
+  FRP_CONFIG_FILE: frpc.toml
 
 jobs:
   rdp-frp:
@@ -22,64 +23,124 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Enable RDP and Open All Ports
+        shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
+
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name "fDenyTSConnections" -Value 0 -Force
+            -Name 'fDenyTSConnections' -Value 0 -Force
 
           Set-ItemProperty `
             -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" -Value 0 -Force
+            -Name 'UserAuthentication' -Value 0 -Force
 
           netsh advfirewall set allprofiles state off
           Restart-Service TermService -Force
 
       - name: Create RDP User (Static Credentials)
+        shell: powershell
         run: |
-          $password = ConvertTo-SecureString "$env:RDP_PASSWORD" -AsPlainText -Force
+          $ErrorActionPreference = 'Stop'
+
+          $securePassword = ConvertTo-SecureString "$env:RDP_PASSWORD" -AsPlainText -Force
 
           if (-not (Get-LocalUser -Name "$env:RDP_USERNAME" -ErrorAction SilentlyContinue)) {
               New-LocalUser `
                 -Name "$env:RDP_USERNAME" `
-                -Password $password `
+                -Password $securePassword `
                 -AccountNeverExpires `
                 -PasswordNeverExpires
           }
 
-          Add-LocalGroupMember -Group "Administrators" -Member "$env:RDP_USERNAME"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "$env:RDP_USERNAME"
+          Add-LocalGroupMember -Group 'Administrators' -Member "$env:RDP_USERNAME"
+          Add-LocalGroupMember -Group 'Remote Desktop Users' -Member "$env:RDP_USERNAME"
 
-      - name: Download FRP Client
+      - name: Download and Prepare FRP (Deterministic)
+        shell: powershell
         run: |
-          $url = "https://github.com/fatedier/frp/releases/download/v0.67.0/frp_0.67.0_windows_amd64.zip"
-          $zip = "$env:TEMP\frp.zip"
-          $dir = "$env:TEMP\frp"
+          $ErrorActionPreference = 'Stop'
 
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Expand-Archive $zip -DestinationPath $dir -Force
+          $frpDir = "$env:FRP_DIR"
+          $zipPath = "$frpDir\frp.zip"
+          $extractDir = "$frpDir\extract"
+          $releaseDir = "$extractDir\frp_$env:FRP_VERSION`_windows_amd64"
+          $frpcExe = "$releaseDir\frpc.exe"
 
-          Move-Item `
-            "$dir\frp_$env:FRP_VERSION_windows_amd64\frpc.exe" `
-            "$env:RUNNER_TEMP\frpc.exe" `
-            -Force
+          $url = "https://github.com/fatedier/frp/releases/download/v$env:FRP_VERSION/frp_$env:FRP_VERSION`_windows_amd64.zip"
 
-      - name: Run FRP Client
+          Write-Host "Creating FRP directory at $frpDir"
+          New-Item -ItemType Directory -Path $frpDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+
+          Write-Host "Downloading FRP from:"
+          Write-Host $url
+          Invoke-WebRequest -Uri $url -OutFile $zipPath
+
+          if (-not (Test-Path $zipPath)) {
+              throw "FRP ZIP download failed"
+          }
+
+          Write-Host "Extracting FRP ZIP"
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+          if (-not (Test-Path $frpcExe)) {
+              throw "frpc.exe not found after extraction"
+          }
+
+          Write-Host "Moving frpc.exe to $frpDir"
+          Move-Item -Path $frpcExe -Destination "$frpDir\frpc.exe" -Force
+
+          if (-not (Test-Path "$frpDir\frpc.exe")) {
+              throw "frpc.exe move failed"
+          }
+
+      - name: Copy FRP Config (Same Directory)
+        shell: powershell
         run: |
-          Copy-Item "$env:FRP_CONFIG_PATH" "$env:RUNNER_TEMP\frpc.toml" -Force
+          $ErrorActionPreference = 'Stop'
+
+          $sourceConfig = "$env:GITHUB_WORKSPACE\$env:FRP_CONFIG_FILE"
+          $destConfig = "$env:FRP_DIR\$env:FRP_CONFIG_FILE"
+
+          if (-not (Test-Path $sourceConfig)) {
+              throw "frpc.toml not found in repository root"
+          }
+
+          Copy-Item -Path $sourceConfig -Destination $destConfig -Force
+
+          if (-not (Test-Path $destConfig)) {
+              throw "Failed to copy frpc.toml"
+          }
+
+      - name: Run FRP Client (Stable)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Set-Location "$env:FRP_DIR"
+
+          Write-Host "Starting FRP from:"
+          Write-Host (Get-Location)
 
           Start-Process `
-            -FilePath "$env:RUNNER_TEMP\frpc.exe" `
-            -ArgumentList "-c", "$env:RUNNER_TEMP\frpc.toml" `
+            -FilePath "$env:FRP_DIR\frpc.exe" `
+            -ArgumentList "-c", "$env:FRP_DIR\$env:FRP_CONFIG_FILE" `
+            -WorkingDirectory "$env:FRP_DIR" `
             -NoNewWindow
 
       - name: Keep Runner Alive
+        shell: powershell
         run: |
+          $ErrorActionPreference = 'Stop'
+
           Write-Host ""
           Write-Host "=============================="
           Write-Host " RDP + FRP SESSION ACTIVE"
           Write-Host "=============================="
-          Write-Host "Username: $env:RDP_USERNAME"
-          Write-Host "Password: $env:RDP_PASSWORD"
+          Write-Host "FRP DIR : $env:FRP_DIR"
+          Write-Host "USERNAME: $env:RDP_USERNAME"
+          Write-Host "PASSWORD: $env:RDP_PASSWORD"
           Write-Host "=============================="
           Write-Host ""
 
