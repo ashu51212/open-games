@@ -1,150 +1,114 @@
-name: RDP-FRP
+name: RDP
 
 on:
   workflow_dispatch:
 
-# ================================
-# USER CONFIGURATION (EDIT HERE)
-# ================================
-env:
-  RDP_USERNAME: ashu
-  RDP_PASSWORD: As12@hu12
-  FRP_VERSION: 0.67.0
-  FRP_DIR: C:\frp
-  FRP_CONFIG_FILE: frpc.toml
-
 jobs:
-  rdp-frp:
+  secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Enable RDP and Open All Ports
-        shell: powershell
+      - name: Configure Core RDP Settings
         run: |
-          $ErrorActionPreference = 'Stop'
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-            -Name 'fDenyTSConnections' -Value 0 -Force
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          
+          # For testing, allow any incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-          Set-ItemProperty `
-            -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name 'UserAuthentication' -Value 0 -Force
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Restart-Service -Name TermService -Force
 
-          netsh advfirewall set allprofiles state off
-          Restart-Service TermService -Force
-
-      - name: Create RDP User (Static Credentials)
-        shell: powershell
+      - name: Create RDP User with Secure Password
         run: |
-          $ErrorActionPreference = 'Stop'
-
-          $securePassword = ConvertTo-SecureString "$env:RDP_PASSWORD" -AsPlainText -Force
-
-          if (-not (Get-LocalUser -Name "$env:RDP_USERNAME" -ErrorAction SilentlyContinue)) {
-              New-LocalUser `
-                -Name "$env:RDP_USERNAME" `
-                -Password $securePassword `
-                -AccountNeverExpires `
-                -PasswordNeverExpires
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
           }
 
-          Add-LocalGroupMember -Group 'Administrators' -Member "$env:RDP_USERNAME"
-          Add-LocalGroupMember -Group 'Remote Desktop Users' -Member "$env:RDP_USERNAME"
-
-      - name: Download and Prepare FRP (Deterministic)
-        shell: powershell
+      - name: Install Tailscale
         run: |
-          $ErrorActionPreference = 'Stop'
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-          $frpDir = "$env:FRP_DIR"
-          $zipPath = "$frpDir\frp.zip"
-          $extractDir = "$frpDir\extract"
-          $releaseDir = "$extractDir\frp_$env:FRP_VERSION`_windows_amd64"
-          $frpcExe = "$releaseDir\frpc.exe"
-
-          $url = "https://github.com/fatedier/frp/releases/download/v$env:FRP_VERSION/frp_$env:FRP_VERSION`_windows_amd64.zip"
-
-          Write-Host "Creating FRP directory at $frpDir"
-          New-Item -ItemType Directory -Path $frpDir -Force | Out-Null
-          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
-
-          Write-Host "Downloading FRP from:"
-          Write-Host $url
-          Invoke-WebRequest -Uri $url -OutFile $zipPath
-
-          if (-not (Test-Path $zipPath)) {
-              throw "FRP ZIP download failed"
-          }
-
-          Write-Host "Extracting FRP ZIP"
-          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-
-          if (-not (Test-Path $frpcExe)) {
-              throw "frpc.exe not found after extraction"
-          }
-
-          Write-Host "Moving frpc.exe to $frpDir"
-          Move-Item -Path $frpcExe -Destination "$frpDir\frpc.exe" -Force
-
-          if (-not (Test-Path "$frpDir\frpc.exe")) {
-              throw "frpc.exe move failed"
-          }
-
-      - name: Copy FRP Config (Same Directory)
-        shell: powershell
+      - name: Establish Tailscale Connection
         run: |
-          $ErrorActionPreference = 'Stop'
-
-          $sourceConfig = "$env:GITHUB_WORKSPACE\$env:FRP_CONFIG_FILE"
-          $destConfig = "$env:FRP_DIR\$env:FRP_CONFIG_FILE"
-
-          if (-not (Test-Path $sourceConfig)) {
-              throw "frpc.toml not found in repository root"
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
           }
-
-          Copy-Item -Path $sourceConfig -Destination $destConfig -Force
-
-          if (-not (Test-Path $destConfig)) {
-              throw "Failed to copy frpc.toml"
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
           }
-
-      - name: Run FRP Client (Stable)
-        shell: powershell
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Accessibility
         run: |
-          $ErrorActionPreference = 'Stop'
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
-          Set-Location "$env:FRP_DIR"
-
-          Write-Host "Starting FRP from:"
-          Write-Host (Get-Location)
-
-          Start-Process `
-            -FilePath "$env:FRP_DIR\frpc.exe" `
-            -ArgumentList "-c", "$env:FRP_DIR\$env:FRP_CONFIG_FILE" `
-            -WorkingDirectory "$env:FRP_DIR" `
-            -NoNewWindow
-
-      - name: Keep Runner Alive
-        shell: powershell
+      - name: Maintain Connection
         run: |
-          $ErrorActionPreference = 'Stop'
-
-          Write-Host ""
-          Write-Host "=============================="
-          Write-Host " RDP + FRP SESSION ACTIVE"
-          Write-Host "=============================="
-          Write-Host "FRP DIR : $env:FRP_DIR"
-          Write-Host "USERNAME: $env:RDP_USERNAME"
-          Write-Host "PASSWORD: $env:RDP_PASSWORD"
-          Write-Host "=============================="
-          Write-Host ""
-
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "==================`n"
+          
+          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-              Write-Host "[$(Get-Date)] Runner active"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
+
