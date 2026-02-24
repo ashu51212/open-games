@@ -51,7 +51,7 @@ jobs:
 
       - name: Download FRP Client
         run: |
-          $url = "https://github.com/fatedier/frp/releases/download/v$env:FRP_VERSION/frp_$env:FRP_VERSION_windows_amd64.zip"
+          $url = "https://github.com/fatedier/frp/releases/download/v0.67.0/frp_0.67.0_windows_amd64.zip"
           $zip = "$env:TEMP\frp.zip"
           $dir = "$env:TEMP\frp"
 
