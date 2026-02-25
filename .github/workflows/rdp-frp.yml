@@ -74,7 +74,7 @@ jobs:
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-              --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+              --authkey=tskey-auth-kk8eiM4Fsg11CNTRL-pJDuUpMSbe6XpH3xvszQf6Vu7m2AgNHbV`
               --hostname=gh-runner-$env:GITHUB_RUN_ID `
               --ephemeral
 
